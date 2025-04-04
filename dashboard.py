@@ -9,6 +9,7 @@ import numpy as np
 from carregador_dados import carregar_dados
 from analise_dados import mostrar_analise
 from classificador import executar_classificacao
+from produto import GestorProdutos
 
 class StoreAnalyzerDashboard:
     def __init__(self, root):
@@ -19,6 +20,7 @@ class StoreAnalyzerDashboard:
         
         self.df = None
         self.resultados_classificacao = None
+        self.gestor_produtos = GestorProdutos()
         
         self.criar_interface()
         
@@ -40,11 +42,15 @@ class StoreAnalyzerDashboard:
         self.tab_classificacao = ttk.Frame(self.tab_control)
         self.tab_control.add(self.tab_classificacao, text="Classificação")
         
+        self.tab_produtos = ttk.Frame(self.tab_control)
+        self.tab_control.add(self.tab_produtos, text="Gestão de Produtos")
+        
         self.tab_control.pack(expand=1, fill="both", padx=10, pady=10)
         
         self.configurar_tab_visao_geral()
         self.configurar_tab_analise()
         self.configurar_tab_classificacao()
+        self.configurar_tab_produtos()
         
         self.status_bar = tk.Label(self.root, text="Pronto", bd=1, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
@@ -124,7 +130,209 @@ class StoreAnalyzerDashboard:
         
         self.frame_roc_curves = tk.Frame(frame)
         self.frame_roc_curves.pack(fill=tk.BOTH, expand=True, pady=10)
+    
+    def configurar_tab_produtos(self):
+        frame = tk.Frame(self.tab_produtos, padx=10, pady=10)
+        frame.pack(fill=tk.BOTH, expand=True)
         
+        frame_lista = tk.LabelFrame(frame, text="Lista de Produtos", padx=10, pady=10)
+        frame_lista.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        frame_tools = tk.Frame(frame_lista)
+        frame_tools.pack(fill=tk.X, pady=(0, 10))
+        
+        tk.Button(frame_tools, text="Novo Produto", command=self.abrir_form_novo_produto).pack(side=tk.LEFT, padx=5)
+        tk.Button(frame_tools, text="Editar", command=self.editar_produto_selecionado).pack(side=tk.LEFT, padx=5)
+        tk.Button(frame_tools, text="Remover", command=self.remover_produto_selecionado).pack(side=tk.LEFT, padx=5)
+        tk.Button(frame_tools, text="Atualizar", command=self.atualizar_lista_produtos).pack(side=tk.LEFT, padx=5)
+        
+        colunas = ("ID", "Nome", "Categoria", "Preço", "Stock")
+        self.tree_produtos = ttk.Treeview(frame_lista, columns=colunas, show="headings")
+        
+        for col in colunas:
+            self.tree_produtos.heading(col, text=col)
+            width = 70 if col in ("ID", "Preço", "Stock") else 150
+            self.tree_produtos.column(col, width=width)
+        
+        scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=self.tree_produtos.yview)
+        self.tree_produtos.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree_produtos.pack(fill=tk.BOTH, expand=True)
+        
+        self.tree_produtos.bind("<Double-1>", lambda event: self.editar_produto_selecionado())
+        
+        self.frame_detalhes = tk.LabelFrame(frame, text="Detalhes do Produto", padx=10, pady=10)
+        self.frame_detalhes.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        campos = [
+            ("ID:", "entry_id", True),
+            ("Nome:", "entry_nome", False),
+            ("Categoria:", "combo_categoria", False),
+            ("Preço Base:", "entry_preco", False),
+            ("Stock:", "entry_stock", False),
+            ("Descrição:", "text_descricao", False)
+        ]
+        
+        for i, (label_text, campo_nome, somente_leitura) in enumerate(campos):
+            frame_campo = tk.Frame(self.frame_detalhes)
+            frame_campo.pack(fill=tk.X, pady=5)
+            
+            tk.Label(frame_campo, text=label_text, width=10, anchor="w").pack(side=tk.LEFT)
+            
+            if campo_nome == "combo_categoria":
+                categorias = self.gestor_produtos.obter_categorias() or ["Ganhos Musculares", "Energia", "Recuperação", "Saúde"]
+                setattr(self, campo_nome, ttk.Combobox(frame_campo, values=categorias))
+                getattr(self, campo_nome).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            elif campo_nome == "text_descricao":
+                setattr(self, campo_nome, tk.Text(frame_campo, height=5, width=30))
+                getattr(self, campo_nome).pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            else:
+                setattr(self, campo_nome, tk.Entry(frame_campo))
+                getattr(self, campo_nome).pack(side=tk.LEFT, fill=tk.X, expand=True)
+                
+                if somente_leitura:
+                    getattr(self, campo_nome).config(state="readonly")
+        
+        frame_botoes = tk.Frame(self.frame_detalhes)
+        frame_botoes.pack(fill=tk.X, pady=10)
+        
+        tk.Button(frame_botoes, text="Guardar", command=self.guardar_produto).pack(side=tk.LEFT, padx=5)
+        tk.Button(frame_botoes, text="Cancelar", command=self.limpar_formulario).pack(side=tk.LEFT, padx=5)
+        
+        self.atualizar_lista_produtos()
+        self.limpar_formulario()
+    
+    def atualizar_lista_produtos(self):
+        for item in self.tree_produtos.get_children():
+            self.tree_produtos.delete(item)
+        
+        produtos_df = self.gestor_produtos.obter_todos_produtos()
+        
+        if produtos_df is not None and not produtos_df.empty:
+            for idx, row in produtos_df.iterrows():
+                self.tree_produtos.insert("", tk.END, values=(
+                    row['ID'],
+                    row['Nome'],
+                    row['Categoria'],
+                    f"{row['Preço_Base']:.2f} €",
+                    row['Stock']
+                ))
+    
+    def limpar_formulario(self):
+        self.entry_id.config(state=tk.NORMAL)
+        self.entry_id.delete(0, tk.END)
+        self.entry_id.config(state="readonly")
+        
+        self.entry_nome.delete(0, tk.END)
+        
+        categorias = self.gestor_produtos.obter_categorias() or ["Ganhos Musculares", "Energia", "Recuperação", "Saúde"]
+        self.combo_categoria.config(values=categorias)
+        self.combo_categoria.delete(0, tk.END)
+        
+        self.entry_preco.delete(0, tk.END)
+        self.entry_stock.delete(0, tk.END)
+        self.text_descricao.delete("1.0", tk.END)
+        
+        self.frame_detalhes.config(text="Detalhes do Produto")
+    
+    def abrir_form_novo_produto(self):
+        self.limpar_formulario()
+        self.frame_detalhes.config(text="Novo Produto")
+    
+    def editar_produto_selecionado(self):
+        selection = self.tree_produtos.selection()
+        
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione um produto para editar")
+            return
+        
+        item = self.tree_produtos.item(selection[0])
+        produto_id = int(item['values'][0])
+        
+        produto = self.gestor_produtos.obter_produto(produto_id)
+        
+        if not produto:
+            messagebox.showerror("Erro", "Não foi possível obter os detalhes do produto")
+            return
+        
+        self.limpar_formulario()
+        
+        self.entry_id.config(state=tk.NORMAL)
+        self.entry_id.delete(0, tk.END)
+        self.entry_id.insert(0, produto['ID'])
+        self.entry_id.config(state="readonly")
+        
+        self.entry_nome.insert(0, produto['Nome'])
+        self.combo_categoria.set(produto['Categoria'])
+        self.entry_preco.insert(0, produto['Preço_Base'])
+        self.entry_stock.insert(0, produto['Stock'])
+        self.text_descricao.insert("1.0", produto['Descrição'])
+        
+        self.frame_detalhes.config(text=f"Editar Produto: {produto['Nome']}")
+    
+    def remover_produto_selecionado(self):
+        selection = self.tree_produtos.selection()
+        
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione um produto para remover")
+            return
+        
+        item = self.tree_produtos.item(selection[0])
+        produto_id = int(item['values'][0])
+        produto_nome = item['values'][1]
+        
+        confirmar = messagebox.askyesno("Confirmar", f"Deseja realmente remover o produto '{produto_nome}'?")
+        
+        if confirmar:
+            if self.gestor_produtos.remover_produto(produto_id):
+                messagebox.showinfo("Sucesso", f"Produto '{produto_nome}' removido com sucesso")
+                self.atualizar_lista_produtos()
+                self.limpar_formulario()
+    
+    def guardar_produto(self):
+        produto_id = self.entry_id.get().strip()
+        nome = self.entry_nome.get().strip()
+        categoria = self.combo_categoria.get().strip()
+        preco_base = self.entry_preco.get().strip()
+        stock = self.entry_stock.get().strip()
+        descricao = self.text_descricao.get("1.0", tk.END).strip()
+        
+        if not nome:
+            messagebox.showwarning("Aviso", "O nome do produto é obrigatório")
+            return
+        
+        if not categoria:
+            messagebox.showwarning("Aviso", "A categoria é obrigatória")
+            return
+        
+        try:
+            preco_base = float(preco_base)
+            if preco_base <= 0:
+                raise ValueError("O preço deve ser maior que zero")
+        except ValueError:
+            messagebox.showwarning("Aviso", "O preço base deve ser um número válido maior que zero")
+            return
+        
+        try:
+            stock = int(stock)
+            if stock < 0:
+                raise ValueError("O stock não pode ser negativo")
+        except ValueError:
+            messagebox.showwarning("Aviso", "O stock deve ser um número inteiro não negativo")
+            return
+        
+        if produto_id:
+            if self.gestor_produtos.atualizar_produto(int(produto_id), nome, categoria, preco_base, stock, descricao):
+                messagebox.showinfo("Sucesso", f"Produto '{nome}' atualizado com sucesso")
+                self.atualizar_lista_produtos()
+                self.limpar_formulario()
+        else:
+            sucesso, novo_id = self.gestor_produtos.adicionar_produto(nome, categoria, preco_base, stock, descricao)
+            if sucesso:
+                messagebox.showinfo("Sucesso", f"Produto '{nome}' adicionado com sucesso (ID: {novo_id})")
+                self.atualizar_lista_produtos()
+                self.limpar_formulario()
+    
     def carregar_dados(self):
         self.atualizar_status("A carregar dados...")
         self.df = carregar_dados()
@@ -247,19 +455,16 @@ class StoreAnalyzerDashboard:
                 img_frame = tk.LabelFrame(frame_imgs, text=label, padx=5, pady=5)
                 img_frame.grid(row=0, column=i, padx=5, pady=5, sticky="nsew")
                 
-                # Usar PIL para carregar a imagem
                 from PIL import Image, ImageTk
                 img = Image.open(img_path)
                 img = img.resize((300, 240), Image.LANCZOS)
                 img_tk = ImageTk.PhotoImage(img)
                 
-                # Guardar referência para evitar garbage collection
                 img_frame.image = img_tk
                 
                 lbl_img = tk.Label(img_frame, image=img_tk)
                 lbl_img.pack(fill=tk.BOTH, expand=True)
                 
-        # Configurar pesos das colunas
         frame_imgs.columnconfigure(0, weight=1)
         frame_imgs.columnconfigure(1, weight=1)
         frame_imgs.columnconfigure(2, weight=1)
